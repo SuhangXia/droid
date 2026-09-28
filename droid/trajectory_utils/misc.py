@@ -1,3 +1,4 @@
+import sys
 import time
 from collections import defaultdict
 from copy import deepcopy
@@ -10,7 +11,7 @@ from droid.calibration.calibration_utils import *
 from droid.camera_utils.info import camera_type_to_string_dict
 from droid.camera_utils.wrappers.recorded_multi_camera_wrapper import RecordedMultiCameraWrapper
 from droid.misc.parameters import *
-from droid.misc.time import time_ms
+from droid.misc.time import monotonic_ns, time_ms
 from droid.misc.transformations import change_pose_frame
 from droid.trajectory_utils.trajectory_reader import TrajectoryReader
 from droid.trajectory_utils.trajectory_writer import TrajectoryWriter
@@ -29,6 +30,7 @@ def collect_trajectory(
     recording_folderpath=False,
     randomize_reset=False,
     reset_robot=True,
+    lifecycle_hooks=None,
 ):
     """
     Collects a robot trajectory.
@@ -48,6 +50,8 @@ def collect_trajectory(
     if save_images:
         assert save_filepath is not None
 
+    lifecycle_hooks = tuple(lifecycle_hooks or ())
+
     # Reset States #
     if controller is not None:
         controller.reset_state()
@@ -64,70 +68,102 @@ def collect_trajectory(
     if reset_robot:
         env.reset(randomize=randomize_reset)
 
+    final_controller_info = {"success": False, "failure": True, "failure_reason": "collector interrupted"}
+    recording_started = bool(recording_folderpath)
+    writer_started = bool(save_filepath)
+    for hook in lifecycle_hooks:
+        hook.on_episode_start(monotonic_ns())
+
     # Begin! #
-    while True:
-        # Collect Miscellaneous Info #
-        controller_info = {} if (controller is None) else controller.get_info()
-        skip_action = wait_for_controller and (not controller_info["movement_enabled"])
-        control_timestamps = {"step_start": time_ms()}
+    try:
+        while True:
+            # Collect Miscellaneous Info #
+            controller_info = {} if (controller is None) else controller.get_info()
+            skip_action = wait_for_controller and (not controller_info["movement_enabled"])
+            control_timestamps = {"step_start": time_ms(), "step_start_monotonic_ns": monotonic_ns()}
 
-        # Get Observation #
-        obs = env.get_observation()
-        if obs_pointer is not None:
-            obs_pointer.update(obs)
-        obs["controller_info"] = controller_info
-        obs["timestamp"]["skip_action"] = skip_action
+            # Get Observation #
+            obs = env.get_observation()
+            if obs_pointer is not None:
+                obs_pointer.update(obs)
+            obs["controller_info"] = controller_info
+            obs["timestamp"]["skip_action"] = skip_action
+            obs["timestamp"]["host_monotonic_ns"] = monotonic_ns()
 
-        # Get Action #
-        control_timestamps["policy_start"] = time_ms()
-        if policy is None:
-            action, controller_action_info = controller.forward(obs, include_info=True)
-        else:
-            action = policy.forward(obs)
-            controller_action_info = {}
+            # Get Action #
+            control_timestamps["policy_start"] = time_ms()
+            control_timestamps["policy_start_monotonic_ns"] = monotonic_ns()
+            if policy is None:
+                action, controller_action_info = controller.forward(obs, include_info=True)
+            else:
+                action = policy.forward(obs)
+                controller_action_info = {}
+            for hook in lifecycle_hooks:
+                before_action = getattr(hook, "before_action", None)
+                if before_action is not None:
+                    action = before_action(obs, action)
 
-        # Regularize Control Frequency #
-        control_timestamps["sleep_start"] = time_ms()
-        comp_time = time_ms() - control_timestamps["step_start"]
-        sleep_left = (1 / env.control_hz) - (comp_time / 1000)
-        if sleep_left > 0:
-            time.sleep(sleep_left)
+            # Regularize Control Frequency #
+            control_timestamps["sleep_start"] = time_ms()
+            control_timestamps["sleep_start_monotonic_ns"] = monotonic_ns()
+            comp_time = time_ms() - control_timestamps["step_start"]
+            sleep_left = (1 / env.control_hz) - (comp_time / 1000)
+            if sleep_left > 0:
+                time.sleep(sleep_left)
 
-        # Moniter Control Frequency #
-        # moniter_control_frequency = True
-        # if moniter_control_frequency:
-        # 	print('Sleep Left: ', sleep_left)
-        # 	print('Feasible Hz: ', (1000 / comp_time))
+            # Step Environment #
+            control_timestamps["control_start"] = time_ms()
+            control_timestamps["control_start_monotonic_ns"] = monotonic_ns()
+            if skip_action:
+                action_info = env.create_action_dict(np.zeros_like(action))
+            else:
+                action_info = env.step(action)
+            action_info.update(controller_action_info)
 
-        # Step Environment #
-        control_timestamps["control_start"] = time_ms()
-        if skip_action:
-            action_info = env.create_action_dict(np.zeros_like(action))
-        else:
-            action_info = env.step(action)
-        action_info.update(controller_action_info)
-
-        # Save Data #
-        control_timestamps["step_end"] = time_ms()
-        obs["timestamp"]["control"] = control_timestamps
-        timestep = {"observation": obs, "action": action_info}
-        if save_filepath:
-            traj_writer.write_timestep(timestep)
-
-        # Check Termination #
-        num_steps += 1
-        if horizon is not None:
-            end_traj = horizon == num_steps
-        else:
-            end_traj = controller_info["success"] or controller_info["failure"]
-
-        # Close Files And Return #
-        if end_traj:
-            if recording_folderpath:
-                env.camera_reader.stop_recording()
+            # Save Data #
+            control_timestamps["step_end"] = time_ms()
+            control_timestamps["step_end_monotonic_ns"] = monotonic_ns()
+            obs["timestamp"]["control"] = control_timestamps
+            timestep = {"observation": obs, "action": action_info}
             if save_filepath:
-                traj_writer.close(metadata=controller_info)
-            return controller_info
+                traj_writer.write_timestep(timestep)
+            for hook in lifecycle_hooks:
+                hook.on_timestep(timestep)
+
+            # Check Termination #
+            num_steps += 1
+            if horizon is not None:
+                end_traj = horizon == num_steps
+            else:
+                end_traj = controller_info["success"] or controller_info["failure"]
+
+            # Close Files And Return #
+            if end_traj:
+                final_controller_info = controller_info
+                break
+    finally:
+        active_exception = sys.exc_info()[0] is not None
+        cleanup_errors = []
+        if recording_started:
+            try:
+                env.camera_reader.stop_recording()
+            except Exception as exc:
+                cleanup_errors.append(exc)
+        if writer_started:
+            try:
+                traj_writer.close(metadata=final_controller_info)
+            except Exception as exc:
+                cleanup_errors.append(exc)
+        end_ns = monotonic_ns()
+        for hook in reversed(lifecycle_hooks):
+            try:
+                hook.on_episode_end(end_ns, final_controller_info)
+            except Exception as exc:
+                cleanup_errors.append(exc)
+        if cleanup_errors and not active_exception:
+            raise cleanup_errors[0]
+
+    return final_controller_info
 
 
 def calibrate_camera(

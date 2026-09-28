@@ -1,0 +1,55 @@
+schema_version: fabric-droid-1.0
+capture:
+  control_hz: 15
+  host_alignment_clock: time.monotonic_ns
+  atomic_episode_close: true
+  minimum_free_gib: 1.0
+  modes:
+    dry_run: false
+    record_only: true
+    robot_disabled: true
+cameras:
+  exterior_image_1_left:
+    kind: d435
+    serial: REPLACE_WITH_D435_SERIAL
+    width: 640
+    height: 480
+    fps: 30
+  wrist_image_left:
+    kind: uvc
+    source: /dev/video0
+    serial: REPLACE_WITH_WRIST_SERIAL
+    width: 640
+    height: 480
+    fps: 30
+  gelsight_left:
+    kind: uvc
+    source: /dev/video1
+    serial: REPLACE_WITH_GELSIGHT_SERIAL
+    width: 640
+    height: 480
+    fps: 30
+ati:
+  model: Nano17
+  endpoint: tcp://192.168.1.20:5555
+  topic: ""
+  expected_rate_hz: 500
+  conflate: false
+  preserve_every_sample: true
+safety:
+  warning_force_n: 12.0
+  hard_stop_force_n: 20.0
+  warning_torque_nm: 0.7
+  hard_stop_torque_nm: 1.0
+  normal_force_feedback_requires_calibration: true
+calibration:
+  calibration_id: uncalibrated
+  T_ati_to_gripper: null
+  gripper_normal_axis: null
+  force_sign: null
+  bias_wrench: [0, 0, 0, 0, 0, 0]
+fabric_omni:
+  root: /home/suhang/projects/fabric-omni
+  checkpoint: /home/suhang/projects/fabric-omni/artifacts/pilots/v2_physical_final170_20260715_071119/exports/final170_physical_teacher/model_only.pt
+  read_only: true
+  cache_output: REPLACE_WITH_DATASET_OUTPUT_PATH

@@ -1,0 +1,31 @@
+data_root: /home/suhang/datasets2/frabric_pi
+curation_root: curation
+reviewer: suhang
+
+segment_overlap:
+  pre_seconds: 0.20
+  post_seconds: 0.20
+  release_post_seconds: 0.33
+
+detector:
+  motion_min_seconds: 0.25
+  contact_min_seconds: 0.12
+  stable_hold_min_seconds: 0.25
+  release_min_seconds: 0.12
+  detector_version: fabric-curator-fusion-v1
+
+proxy:
+  enabled: true
+  width: 640
+  video_crf: 28
+  preset: veryfast
+  thumbnail_time_seconds: 1.0
+
+duration_min_seconds: 3.0
+duration_max_seconds: 180.0
+
+splits:
+  train:
+    - swatch_001
+  validation: []
+  heldout: []

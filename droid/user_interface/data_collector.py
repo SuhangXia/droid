@@ -8,7 +8,7 @@ import h5py
 
 import droid.trajectory_utils.misc as tu
 from droid.calibration.calibration_utils import check_calibration_info
-from droid.misc.parameters import hand_camera_id, droid_version, robot_serial_number, robot_type
+from droid.misc.parameters import droid_version, hand_camera_id, robot_serial_number, robot_type
 
 # Prepare Data Folder #
 dir_path = os.path.dirname(os.path.realpath(__file__))
@@ -16,10 +16,20 @@ data_dir = os.path.join(dir_path, "../../data")
 
 
 class DataCollecter:
-    def __init__(self, env, controller, policy=None, save_data=True, save_traj_dir=None):
+    def __init__(
+        self,
+        env,
+        controller,
+        policy=None,
+        save_data=True,
+        save_traj_dir=None,
+        lifecycle_hook_factory=None,
+    ):
         self.env = env
         self.controller = controller
         self.policy = policy
+        self.lifecycle_hook_factory = lifecycle_hook_factory
+        self.active_lifecycle_hooks = []
 
         self.last_traj_path = None
         self.traj_running = False
@@ -92,19 +102,27 @@ class DataCollecter:
         # Collect Trajectory #
         self.traj_running = True
         self.env._robot.establish_connection()
-        controller_info = tu.collect_trajectory(
-            self.env,
-            controller=self.controller,
-            metadata=info,
-            policy=self.policy,
-            obs_pointer=self.obs_pointer,
-            reset_robot=reset_robot,
-            recording_folderpath=recording_folderpath,
-            save_filepath=save_filepath,
-            wait_for_controller=True,
-        )
-        self.traj_running = False
-        self.obs_pointer = {}
+        lifecycle_hooks = []
+        if self.lifecycle_hook_factory is not None and save_filepath is not None:
+            lifecycle_hooks.append(self.lifecycle_hook_factory(os.path.dirname(save_filepath), deepcopy(info)))
+        self.active_lifecycle_hooks = lifecycle_hooks
+        try:
+            controller_info = tu.collect_trajectory(
+                self.env,
+                controller=self.controller,
+                metadata=info,
+                policy=self.policy,
+                obs_pointer=self.obs_pointer,
+                reset_robot=reset_robot,
+                recording_folderpath=recording_folderpath,
+                save_filepath=save_filepath,
+                wait_for_controller=True,
+                lifecycle_hooks=lifecycle_hooks,
+            )
+        finally:
+            self.active_lifecycle_hooks = []
+            self.traj_running = False
+            self.obs_pointer = {}
 
         # Sort Trajectory #
         self.traj_saved = controller_info["success"] and (save_filepath is not None)
@@ -112,6 +130,14 @@ class DataCollecter:
         if self.traj_saved:
             self.last_traj_path = os.path.join(self.success_logdir, info["time"])
             os.rename(os.path.join(self.failure_logdir, info["time"]), self.last_traj_path)
+
+    def mark_fabric_event(self, name):
+        """Forward an optional Fabric-DROID event without affecting base DROID."""
+
+        for hook in self.active_lifecycle_hooks:
+            marker = getattr(hook, "mark_event", None)
+            if marker is not None:
+                marker(name)
 
     def calibrate_camera(self, cam_id, reset_robot=True):
         self.traj_running = True

@@ -43,6 +43,26 @@ dev = [
 postprocessing = [
     "scikit-image",
 ]
+fabric-droid = [
+    "pyarrow",
+    "pyzmq",
+]
+fabric-droid-curator = [
+    "fastapi>=0.115",
+    "h5py>=3.11",
+    "numpy>=1.26",
+    "opencv-python-headless>=4.10",
+    "pyarrow>=17",
+    "pydantic>=2.8",
+    "PyYAML>=6",
+    "sqlalchemy>=2.0",
+    "uvicorn[standard]>=0.30",
+]
+fabric-droid-curator-dev = [
+    "httpx>=0.27",
+    "pytest>=8",
+    "ruff>=0.8",
+]
 
 [project.urls]
 homepage = "https://github.com/droid-dataset/droid"

@@ -30,6 +30,8 @@ class RobotGUI(tk.Tk):
         self.geometry("1500x1200")
         self.attributes("-fullscreen", fullscreen)
         self.bind("<Escape>", lambda e: self.destroy())
+        self.bind("<KeyPress-F9>", lambda e: self.robot.mark_fabric_event("probe_complete"), add="+")
+        self.bind("<KeyPress-F10>", lambda e: self.robot.mark_fabric_event("release_time"), add="+")
         if right_controller:
             self.oculus_controller = "right"
             self.button_a = "A"
